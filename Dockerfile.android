@@ -1,0 +1,64 @@
+FROM ubuntu:24.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG ANDROID_CMDLINE_TOOLS_VERSION=11076708
+ARG NODE_MAJOR=22
+ARG PNPM_VERSION=9.12.0
+ARG ANDROID_PLATFORM=android-35
+ARG ANDROID_BUILD_TOOLS=35.0.0
+ARG APP_ENV=development
+ARG EXPO_PUBLIC_API_BASE_URL=
+ARG EXPO_PUBLIC_OAUTH_SERVER_URL=
+ARG EXPO_PUBLIC_ENABLE_DEV_MENU=false
+
+ENV ANDROID_SDK_ROOT=/opt/android-sdk \
+    ANDROID_HOME=/opt/android-sdk \
+    JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 \
+    GRADLE_USER_HOME=/workspace/.gradle \
+    APP_ENV=${APP_ENV} \
+    NODE_ENV=${APP_ENV} \
+    EXPO_PUBLIC_API_BASE_URL=${EXPO_PUBLIC_API_BASE_URL} \
+    EXPO_PUBLIC_OAUTH_SERVER_URL=${EXPO_PUBLIC_OAUTH_SERVER_URL} \
+    EXPO_PUBLIC_ENABLE_DEV_MENU=${EXPO_PUBLIC_ENABLE_DEV_MENU} \
+    PATH=/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools:/opt/android-sdk/emulator:/opt/android-sdk/build-tools/${ANDROID_BUILD_TOOLS}:${PATH}
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       ca-certificates \
+       curl \
+       git \
+       openjdk-17-jdk \
+       sudo \
+       unzip \
+       wget \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends nodejs \
+    && npm install --global pnpm@${PNPM_VERSION} \
+    && npm cache clean --force \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p ${ANDROID_SDK_ROOT}/cmdline-tools \
+    && wget -q https://dl.google.com/android/repository/commandlinetools-linux-${ANDROID_CMDLINE_TOOLS_VERSION}_latest.zip -O /tmp/cmdline-tools.zip \
+    && unzip -q /tmp/cmdline-tools.zip -d /tmp/android-cmdline-tools \
+    && mv /tmp/android-cmdline-tools/cmdline-tools ${ANDROID_SDK_ROOT}/cmdline-tools/latest \
+    && rm -rf /tmp/cmdline-tools.zip /tmp/android-cmdline-tools \
+    && yes | sdkmanager --licenses >/dev/null || true \
+    && sdkmanager --sdk_root=${ANDROID_SDK_ROOT} \
+       "platform-tools" \
+       "platforms;${ANDROID_PLATFORM}" \
+       "build-tools;${ANDROID_BUILD_TOOLS}" \
+    && yes | sdkmanager --licenses >/dev/null || true
+
+RUN useradd --create-home --shell /bin/bash --groups sudo developer \
+    && echo "developer ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/developer \
+    && chmod 0440 /etc/sudoers.d/developer \
+    && mkdir -p /workspace /home/developer/.gradle \
+    && chown -R developer:developer /workspace /home/developer ${ANDROID_SDK_ROOT}
+
+WORKDIR /workspace
+USER developer
+
+CMD ["bash"]

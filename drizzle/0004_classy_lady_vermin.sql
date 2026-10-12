@@ -1,0 +1,1 @@
+ALTER TABLE `redemption_review_events` ADD `internalNote` text;

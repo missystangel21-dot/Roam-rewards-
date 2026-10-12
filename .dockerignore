@@ -1,0 +1,17 @@
+node_modules
+.expo
+.git
+.gitignore
+.env
+.env.*
+*.log
+coverage
+dist
+web-build
+.gradle
+android/.gradle
+android/build
+android/app/build
+ios/Pods
+ios/build
+.DS_Store

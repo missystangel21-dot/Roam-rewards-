@@ -1,0 +1,71 @@
+# Roam Rewards admin API alert rules.
+# Load this file through Prometheus rule_files and route the resulting alerts
+# through Alertmanager. Thresholds are intentionally conservative defaults;
+# tune them against the service's normal traffic baseline.
+groups:
+  - name: roam-rewards-admin-rate-limit
+    interval: 30s
+    rules:
+      - alert: RoamRewardsRedisRateLimitLatencyWarning
+        expr: |
+          roam_rewards_admin_rate_limit_redis_latency_ms_average > 100
+          and roam_rewards_admin_rate_limit_redis_latency_ms_count >= 20
+        for: 5m
+        labels:
+          severity: warning
+          service: roam-rewards
+          component: admin-rate-limit
+        annotations:
+          summary: Redis rate-limit latency is elevated
+          description: The rolling average Redis latency for admin rate-limit checks has been above 100ms for 5 minutes.
+          runbook: Check Redis saturation, network latency, connection health, and API instance CPU.
+
+      - alert: RoamRewardsRedisRateLimitLatencyCritical
+        expr: |
+          roam_rewards_admin_rate_limit_redis_latency_ms_average > 500
+          and roam_rewards_admin_rate_limit_redis_latency_ms_count >= 20
+        for: 2m
+        labels:
+          severity: critical
+          service: roam-rewards
+          component: admin-rate-limit
+        annotations:
+          summary: Redis rate-limit latency is critically high
+          description: The rolling average Redis latency for admin rate-limit checks has been above 500ms for 2 minutes.
+          runbook: Investigate Redis availability and failover immediately; rate-limit enforcement may be delaying admin requests.
+
+      - alert: RoamRewardsAdminRateLimitDenialRateWarning
+        expr: |
+          (
+            increase(roam_rewards_admin_rate_limit_denied_requests_total[10m])
+            /
+            clamp_min(increase(roam_rewards_admin_rate_limit_allowed_requests_total[10m]) + increase(roam_rewards_admin_rate_limit_denied_requests_total[10m]), 1)
+          ) > 0.10
+          and increase(roam_rewards_admin_rate_limit_denied_requests_total[10m]) >= 10
+        for: 5m
+        labels:
+          severity: warning
+          service: roam-rewards
+          component: admin-rate-limit
+        annotations:
+          summary: Admin API rate-limit denial rate is elevated
+          description: More than 10% of admin rate-limit checks were denied during the last 10 minutes, with at least 10 denials.
+          runbook: Check for abuse, polling regressions, retries, or an admin rate-limit configuration that is too restrictive.
+
+      - alert: RoamRewardsAdminRateLimitDenialRateCritical
+        expr: |
+          (
+            increase(roam_rewards_admin_rate_limit_denied_requests_total[10m])
+            /
+            clamp_min(increase(roam_rewards_admin_rate_limit_allowed_requests_total[10m]) + increase(roam_rewards_admin_rate_limit_denied_requests_total[10m]), 1)
+          ) > 0.25
+          and increase(roam_rewards_admin_rate_limit_denied_requests_total[10m]) >= 25
+        for: 2m
+        labels:
+          severity: critical
+          service: roam-rewards
+          component: admin-rate-limit
+        annotations:
+          summary: Admin API rate-limit denial rate is critically high
+          description: More than 25% of admin rate-limit checks were denied during the last 10 minutes, with at least 25 denials.
+          runbook: Triage traffic and client behavior, then verify the sliding-window limits and Redis state before changing thresholds.

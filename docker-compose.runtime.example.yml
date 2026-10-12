@@ -1,0 +1,27 @@
+services:
+  api:
+    image: ${ROAM_REWARDS_SERVER_IMAGE:-roam-rewards-server:latest}
+    restart: unless-stopped
+    entrypoint: ["/usr/local/bin/docker-runtime-entrypoint.sh"]
+    command: ["node", "dist/index.js"]
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      APP_ENV: production
+    secrets:
+      - database_url
+      - jwt_secret
+      - redis_url
+    ports:
+      - "${API_PORT:-3000}:3000"
+
+secrets:
+  database_url:
+    external: true
+    name: ${ROAM_REWARDS_DATABASE_URL_SECRET:-roam-rewards-database-url}
+  jwt_secret:
+    external: true
+    name: ${ROAM_REWARDS_JWT_SECRET_NAME:-roam-rewards-jwt-secret}
+  redis_url:
+    external: true
+    name: ${ROAM_REWARDS_REDIS_URL_SECRET:-roam-rewards-redis-url}

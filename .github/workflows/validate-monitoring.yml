@@ -1,0 +1,25 @@
+name: Validate monitoring configuration
+
+on:
+  pull_request:
+    paths:
+      - "monitoring/**"
+  push:
+    branches: [main]
+    paths:
+      - "monitoring/**"
+
+jobs:
+  validate-prometheus-alerts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Prometheus alert rules
+        run: docker run --rm -v "$PWD/monitoring:/etc/prometheus:ro" prom/prometheus:v3.5.0 promtool check rules /etc/prometheus/prometheus-alerts.yml
+
+  validate-alertmanager:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Alertmanager routing
+        run: docker run --rm -v "$PWD/monitoring:/etc/alertmanager:ro" prom/alertmanager:v0.28.1 amtool check-config /etc/alertmanager/alertmanager.yml

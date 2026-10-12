@@ -1,0 +1,57 @@
+# Roam Rewards Alertmanager configuration.
+# Mount the webhook URL files as secrets in the Alertmanager container:
+#   /etc/alertmanager/secrets/incident_webhook_url
+#   /etc/alertmanager/secrets/chat_webhook_url
+# The URLs can target PagerDuty Events API, Opsgenie, Slack, Teams, or an
+# internal incident/chat relay that accepts Alertmanager webhook payloads.
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: warnings-chat
+  group_by:
+    - alertname
+    - service
+    - component
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - receiver: critical-incident-response
+      matchers:
+        - severity="critical"
+      group_wait: 10s
+      group_interval: 2m
+      repeat_interval: 30m
+      continue: false
+
+    - receiver: warnings-chat
+      matchers:
+        - severity="warning"
+      group_wait: 2m
+      group_interval: 10m
+      repeat_interval: 6h
+      continue: false
+
+receivers:
+  - name: critical-incident-response
+    webhook_configs:
+      - url_file: /etc/alertmanager/secrets/incident_webhook_url
+        send_resolved: true
+
+  - name: warnings-chat
+    webhook_configs:
+      - url_file: /etc/alertmanager/secrets/chat_webhook_url
+        send_resolved: true
+
+inhibit_rules:
+  # A critical alert suppresses the corresponding warning while the incident
+  # is active, avoiding duplicate paging and chat noise.
+  - source_matchers:
+      - severity="critical"
+    target_matchers:
+      - severity="warning"
+    equal:
+      - alertname
+      - service
+      - component

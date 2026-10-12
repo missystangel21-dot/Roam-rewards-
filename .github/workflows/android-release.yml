@@ -1,0 +1,120 @@
+name: Build signed Android release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag; defaults to v<run number>"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: production
+    concurrency:
+      group: android-production-release
+      cancel-in-progress: false
+    env:
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      EXPECTED_PACKAGE_NAME: com.app.roamrewards
+      EXPECTED_CERT_SHA256: ${{ vars.EXPECTED_CERT_SHA256 }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate signing secrets are configured
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "Missing required GitHub Actions secret: $name" >&2
+              exit 1
+            fi
+          done
+          if [[ -z "${EXPECTED_CERT_SHA256:-}" ]]; then
+            echo "Missing required production Environment variable: EXPECTED_CERT_SHA256" >&2
+            exit 1
+          fi
+
+      - name: Build Android development image
+        run: docker build --file Dockerfile.android --tag roam-rewards-android:release .
+
+      - name: Generate native project and create signing material
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p .ci-signing
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > .ci-signing/release.keystore
+          chmod 600 .ci-signing/release.keystore
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/workspace/roam-rewards" \
+            --volume roam-rewards-release-gradle:/workspace/.gradle \
+            roam-rewards-android:release \
+            bash -lc 'cd /workspace/roam-rewards && pnpm install --frozen-lockfile && pnpm exec expo prebuild --clean --non-interactive'
+          cp .ci-signing/release.keystore android/release.keystore
+          cat > android/keystore.properties <<EOF
+          storeFile=release.keystore
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          keyPassword=$ANDROID_KEY_PASSWORD
+          EOF
+          chmod 600 android/keystore.properties
+          node scripts/configure-android-signing.mjs
+
+      - name: Assemble signed release APK
+        run: |
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/workspace/roam-rewards" \
+            --volume roam-rewards-release-gradle:/workspace/.gradle \
+            roam-rewards-android:release \
+            bash -lc 'cd /workspace/roam-rewards && pnpm install --frozen-lockfile && cd android && ./gradlew --no-daemon --stacktrace :app:assembleRelease'
+
+      - name: Test APK structure, alignment, and signature
+        run: |
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/workspace/roam-rewards" \
+            --env EXPECTED_PACKAGE_NAME \
+            --env EXPECTED_CERT_SHA256 \
+            --env REQUIRE_IDENTITY_ASSERTIONS=true \
+            roam-rewards-android:release \
+            bash -lc 'cd /workspace/roam-rewards && bash scripts/test-signed-apk.sh android/app/build/outputs/apk/release/app-release.apk'
+
+      - name: Upload signed release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: roam-rewards-release-apk
+          path: android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Create GitHub Release and attach signed APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_RELEASE_TAG: ${{ inputs.release_tag }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          apk_path="$(find android/app/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' -print -quit)"
+          [[ -n "$apk_path" && -f "$apk_path" ]] || { echo "Signed APK not found" >&2; exit 1; }
+          release_tag="${REQUESTED_RELEASE_TAG:-v${GITHUB_RUN_NUMBER}}"
+          release_title="Roam Rewards ${release_tag}"
+          gh release create "$release_tag" "$apk_path#roam-rewards-${release_tag}.apk" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$release_title" \
+            --generate-notes
+          echo "Created GitHub Release $release_tag and attached signed APK"
+
+      - name: Remove signing material
+        if: always()
+        shell: bash
+        run: rm -rf .ci-signing android/release.keystore android/keystore.properties

@@ -1,0 +1,31 @@
+{
+  "name": "Roam Rewards Android",
+  "build": {
+    "dockerfile": "../Dockerfile.android",
+    "context": ".."
+  },
+  "workspaceFolder": "/workspace/roam-rewards",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace/roam-rewards,type=bind,consistency=cached",
+  "remoteUser": "developer",
+  "runArgs": [
+    "--init"
+  ],
+  "containerEnv": {
+    "EXPO_USE_METRO_WORKSPACE_ROOT": "1"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "ms-azuretools.vscode-docker",
+        "vscode.typescript-language-features"
+      ]
+    }
+  },
+  "postCreateCommand": "pnpm install --frozen-lockfile",
+  "forwardPorts": [8081, 3000],
+  "remoteEnv": {
+    "GRADLE_USER_HOME": "/workspace/.gradle"
+  }
+}

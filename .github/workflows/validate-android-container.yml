@@ -1,0 +1,79 @@
+name: Validate Android development container
+
+on:
+  pull_request:
+    paths:
+      - "Dockerfile.android"
+      - ".dockerignore"
+      - ".devcontainer/**"
+      - "app.config.ts"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "app/**"
+      - "components/**"
+      - "lib/**"
+      - "hooks/**"
+  push:
+    branches: [main]
+    paths:
+      - "Dockerfile.android"
+      - ".dockerignore"
+      - ".devcontainer/**"
+      - "app.config.ts"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "app/**"
+      - "components/**"
+      - "lib/**"
+      - "hooks/**"
+
+jobs:
+  android-container-and-gradle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      matrix:
+        include:
+          - name: development
+            api_base_url: http://10.0.2.2:3000
+            oauth_server_url: http://10.0.2.2:3000
+            enable_dev_menu: "true"
+          - name: production
+            api_base_url: https://roamrewards-gfvx2j2q.manus.space
+            oauth_server_url: https://api.manus.im
+            enable_dev_menu: "false"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build Android ${{ matrix.name }} image
+        run: >-
+          docker build --file Dockerfile.android
+          --build-arg APP_ENV=${{ matrix.name }}
+          --build-arg EXPO_PUBLIC_API_BASE_URL=${{ matrix.api_base_url }}
+          --build-arg EXPO_PUBLIC_OAUTH_SERVER_URL=${{ matrix.oauth_server_url }}
+          --build-arg EXPO_PUBLIC_ENABLE_DEV_MENU=${{ matrix.enable_dev_menu }}
+          --tag roam-rewards-android:${{ matrix.name }} .
+
+      - name: Generate native project and assemble debug APK
+        run: >-
+          docker run --rm
+          --volume "$GITHUB_WORKSPACE:/workspace/roam-rewards"
+          --volume roam-rewards-ci-gradle:/workspace/.gradle
+          roam-rewards-android:${{ matrix.name }}
+          bash -lc
+          'cd /workspace/roam-rewards
+          && pnpm install --frozen-lockfile
+          && pnpm exec expo prebuild --clean --non-interactive
+          && test -x android/gradlew
+          && cd android
+          && ./gradlew --no-daemon --stacktrace :app:assembleDebug'
+
+      - name: Verify generated Android project
+        run: >-
+          docker run --rm
+          --volume "$GITHUB_WORKSPACE:/workspace/roam-rewards:ro"
+          roam-rewards-android:${{ matrix.name }}
+          bash -lc
+          'test -f /workspace/roam-rewards/android/settings.gradle
+          && test -f /workspace/roam-rewards/android/app/build.gradle'

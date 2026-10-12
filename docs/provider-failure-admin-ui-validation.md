@@ -1,0 +1,3 @@
+# Provider-Failure Admin UI Validation
+
+The admin provider-alert screen was previewed at 390x844 in the managed web preview. The screen renders as a portrait-first admin monitor with a visible back control, green LIVE indicator, shield status card, and access-denied state when no authenticated admin session is present. The second preview confirmed the back-chevron icon mapping is now rendered correctly. The screen uses foreground polling every five seconds, a 15-minute lookback window, a deduplicated toast for newly observed failure IDs, and retry-aware copy that explicitly avoids implying a payout was executed.

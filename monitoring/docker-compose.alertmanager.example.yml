@@ -1,0 +1,22 @@
+services:
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    volumes:
+      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./secrets/incident_webhook_url:/etc/alertmanager/secrets/incident_webhook_url:ro
+      - ./secrets/chat_webhook_url:/etc/alertmanager/secrets/chat_webhook_url:ro
+      - alertmanager-data:/alertmanager
+    ports:
+      - "9093:9093"
+
+volumes:
+  alertmanager-data:
+
+# Create secret files out-of-band before starting:
+#   mkdir -p secrets
+#   printf '%s' 'https://your-incident-relay.example/alertmanager' > secrets/incident_webhook_url
+#   printf '%s' 'https://your-chat-relay.example/alertmanager' > secrets/chat_webhook_url
+#   chmod 600 secrets/*

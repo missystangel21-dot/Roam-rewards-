@@ -1,0 +1,55 @@
+# Project TODO
+
+- [x] Create the Roam Rewards visual brand and custom application icon.
+- [x] Configure portrait app branding, color tokens, and mobile permissions.
+- [x] Create reusable game domain models, deterministic quest data, and a local reward ledger.
+- [x] Build the Explore radar and nearby fixed-reward beacon experience.
+- [x] Build the permission-aware Beacon Scan and deterministic quest-completion flow.
+- [x] Build the Wallet, activity receipts, and simulated cash-out review flow.
+- [x] Build the Safety & Rules and Profile & Eligibility screens.
+- [x] Add anti-fraud guardrails, safety gates, and prototype payout boundaries.
+- [x] Add a U.S.-adult self-attestation gate before reward scans.
+- [x] Add automated tests for reward calculation, one-time quest claims, and redemption eligibility.
+- [x] Verify the mobile build, review the backlog, and prepare a checkpoint for delivery.
+- [x] Add a prototype-only simulated ad-view flow after verified beacon scans.
+- [x] Add non-redeemable Explorer XP and cosmetic progression that cannot alter Trail Points or cash-out eligibility.
+- [x] Test that ad completion leaves Trail Points, cash conversion, and redemption eligibility unchanged.
+- [x] Add Explorer XP level thresholds and a next-level progress indicator on Profile.
+- [x] Test Explorer XP level calculations and remaining-XP messaging.
+- [x] Design a secure database schema for user XP, cash-equivalent ledgers, and redemption requests.
+- [x] Define authenticated backend API contracts, authorization, fraud controls, and operational audit requirements.
+- [x] Implement protected tRPC reward-summary, Trail Points ledger, Explorer XP, and simulated redemption procedures.
+- [x] Add authenticated procedure tests covering user scoping, ledger reservation, and XP separation.
+- [x] Implement admin-only redemption queue, approval, and rejection procedures with immutable audit events.
+- [x] Add tests preventing non-admin review access and invalid redemption state transitions.
+- [x] Add standardized reviewer reason-code templates for redemption decisions.
+- [x] Require a distinct second administrator before sensitive redemption approval becomes final.
+- [x] Test reason-code validation, separation of duties, and dual-approval state transitions.
+- [x] Define risk-related rejection reason codes and internal-note requirements.
+- [x] Document note validation, privacy, audit, and reviewer-facing error behavior.
+- [x] Add unit tests for missing, short, sensitive, and valid risk-rejection internal notes.
+- [x] Add audit-log assertions proving invalid rejection notes cause no status or ledger mutations.
+- [x] Add a transaction rollback fixture for redemption rejection integration tests.
+- [x] Verify failed rejection transitions leave status, balance, ledger, and audit state unchanged.
+- [x] Add provider-failure rollback coverage for pre-commit rejection transactions.
+- [x] Add post-commit outbox retry coverage without duplicate compensation or audit events.
+- [x] Run provider-failure rollback scenarios against a disposable MySQL database.
+- [x] Verify database cleanup and document compatibility results.
+- [x] Add a real-time provider-failure event channel for admin redemption review.
+- [x] Add a deduplicated admin toast with retry-aware messaging.
+- [x] Test provider-failure events, notification deduplication, and toast behavior.
+- [x] Add an authenticated admin navigation entry from the reviewer workflow to Provider alerts.
+- [x] Add a dynamic pending-provider-alert count badge to the authenticated admin reviewer entry.
+- [x] Add an authenticated-admin UI test with a mocked session for the pending-alert badge.
+- [x] Add an end-to-end authenticated browser test with a seeded admin session and disposable cleanup.
+- [x] Assert in the real browser test that regular-user sessions cannot see the reviewer navigation entry.
+- [x] Add a hover tooltip describing provider-failure alert types on the pending-alert badge.
+- [x] Add a mobile tap interaction to show and dismiss the pending-alert tooltip without navigating.
+- [x] Add a subtle pulse animation to the pending-alert badge when the count is greater than zero.
+- [x] Add an admin-only Mark as read action inside the pending-alert tooltip without changing reward data.
+- [x] Add a success toast after Mark as read with an Undo action that restores the prior unread state.
+- [x] Add an authenticated View Details link inside the provider-alert tooltip.
+- [x] Package the provider-alert admin workflow as a reusable Manus skill.
+- [x] Add severity and date filtering options to the full admin alerts management page.
+- [x] Add bottom-of-list pagination or infinite-scroll controls for large alert volumes while preserving active filters.
+- [x] Move severity and date filtering into the authenticated server query while preserving cursor pagination and sort behavior.
