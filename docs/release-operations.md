@@ -41,6 +41,20 @@ gh variable set EXPECTED_CERT_SHA256 \
 
 Replace the example fingerprint with the actual 32-byte, colon-separated certificate digest. The protected release workflow passes `EXPECTED_PACKAGE_NAME=com.app.roamrewards` and `EXPECTED_CERT_SHA256` into the Android container and runs with `REQUIRE_IDENTITY_ASSERTIONS=true`; a missing or malformed fingerprint stops the job before artifact upload or Release creation.
 
+For automatic dashboard updates, also configure the callback URL and bearer secret:
+
+```bash
+printf '%s' 'https://your-api.example.com/api/internal/github/android-verification' |
+  gh variable set APK_VERIFICATION_STATUS_ENDPOINT --env production --repo "$repo" --body -
+
+gh secret set GITHUB_VERIFICATION_WEBHOOK_SECRET \
+  --env production \
+  --repo "$repo" \
+  < "$HOME/secure/github-verification-webhook-secret"
+```
+
+The same `GITHUB_VERIFICATION_WEBHOOK_SECRET` must be present in the API runtime. The workflow posts the verified package name, certificate fingerprint, APK SHA-256, release tag, and UTC timestamp to the endpoint only after local identity verification succeeds. The endpoint rejects unauthenticated, malformed, or identity-mismatched `VERIFIED` payloads.
+
 If the repository uses a GitHub team instead of individual reviewers, configure the team through the GitHub UI or extend the script to resolve team IDs; the included script intentionally accepts individual usernames only.
 
 ## 2. Provision external Docker Swarm secrets
@@ -146,6 +160,7 @@ APK_IDENTITY_RELEASE_TAG=v1.0.0
 APK_IDENTITY_VERIFIED_AT=2026-10-12T20:00:00.000Z
 EXPECTED_PACKAGE_NAME=com.app.roamrewards
 EXPECTED_CERT_SHA256=<actual-fingerprint>
+GITHUB_VERIFICATION_WEBHOOK_SECRET=<same-callback-secret>
 ```
 
 Set `APK_IDENTITY_VERIFICATION_STATUS=FAILED` when either identity assertion fails. The dashboard procedure is admin-only and refreshes every 30 seconds. `NOT CONFIGURED` is intentionally shown until a real release result is connected; it is not a successful verification.

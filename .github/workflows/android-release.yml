@@ -24,42 +24,81 @@ jobs:
       ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
       ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
       ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-      EXPECTED_PACKAGE_NAME: com.app.roamrewards
+      EXPECTED_PACKAGE_NAME: ${{ vars.EXPECTED_PACKAGE_NAME }}
       EXPECTED_CERT_SHA256: ${{ vars.EXPECTED_CERT_SHA256 }}
+      APK_VERIFICATION_STATUS_ENDPOINT: ${{ vars.APK_VERIFICATION_STATUS_ENDPOINT }}
+      GITHUB_VERIFICATION_WEBHOOK_SECRET: ${{ secrets.GITHUB_VERIFICATION_WEBHOOK_SECRET }}
+
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Validate signing secrets are configured
+      - name: Validate production signing and identity configuration
         shell: bash
         run: |
           set -Eeuo pipefail
-          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+
+          for name in \
+            ANDROID_KEYSTORE_BASE64 \
+            ANDROID_KEYSTORE_PASSWORD \
+            ANDROID_KEY_ALIAS \
+            ANDROID_KEY_PASSWORD; do
             if [[ -z "${!name:-}" ]]; then
-              echo "Missing required GitHub Actions secret: $name" >&2
+              echo "Missing required production Environment secret: $name" >&2
               exit 1
             fi
           done
-          if [[ -z "${EXPECTED_CERT_SHA256:-}" ]]; then
+
+          [[ -n "${EXPECTED_PACKAGE_NAME:-}" ]] || {
+            echo "Missing required production Environment variable: EXPECTED_PACKAGE_NAME" >&2
+            exit 1
+          }
+
+          [[ "$EXPECTED_PACKAGE_NAME" =~ ^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$ ]] || {
+            echo "EXPECTED_PACKAGE_NAME is not a valid Android application ID" >&2
+            exit 1
+          }
+
+          [[ -n "${EXPECTED_CERT_SHA256:-}" ]] || {
             echo "Missing required production Environment variable: EXPECTED_CERT_SHA256" >&2
             exit 1
-          fi
+          }
 
-      - name: Build Android development image
+          [[ "$EXPECTED_CERT_SHA256" =~ ^([[:xdigit:]][[:xdigit:]]:){31}[[:xdigit:]][[:xdigit:]]$ ]] || {
+            echo "EXPECTED_CERT_SHA256 must contain exactly 32 colon-separated hexadecimal byte pairs" >&2
+            exit 1
+          }
+
+          [[ -n "${APK_VERIFICATION_STATUS_ENDPOINT:-}" ]] || {
+            echo "Missing required production Environment variable: APK_VERIFICATION_STATUS_ENDPOINT" >&2
+            exit 1
+          }
+          [[ "$APK_VERIFICATION_STATUS_ENDPOINT" =~ ^https:// ]] || {
+            echo "APK_VERIFICATION_STATUS_ENDPOINT must use HTTPS" >&2
+            exit 1
+          }
+          [[ -n "${GITHUB_VERIFICATION_WEBHOOK_SECRET:-}" ]] || {
+            echo "Missing required production Environment secret: GITHUB_VERIFICATION_WEBHOOK_SECRET" >&2
+            exit 1
+          }
+
+      - name: Build Android release image
         run: docker build --file Dockerfile.android --tag roam-rewards-android:release .
 
-      - name: Generate native project and create signing material
+      - name: Generate native project and configure signing
         shell: bash
         run: |
           set -Eeuo pipefail
           mkdir -p .ci-signing
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > .ci-signing/release.keystore
           chmod 600 .ci-signing/release.keystore
+
           docker run --rm \
             --volume "$GITHUB_WORKSPACE:/workspace/roam-rewards" \
             --volume roam-rewards-release-gradle:/workspace/.gradle \
             roam-rewards-android:release \
             bash -lc 'cd /workspace/roam-rewards && pnpm install --frozen-lockfile && pnpm exec expo prebuild --clean --non-interactive'
+
           cp .ci-signing/release.keystore android/release.keystore
           cat > android/keystore.properties <<EOF
           storeFile=release.keystore
@@ -71,15 +110,19 @@ jobs:
           node scripts/configure-android-signing.mjs
 
       - name: Assemble signed release APK
+        shell: bash
         run: |
+          set -Eeuo pipefail
           docker run --rm \
             --volume "$GITHUB_WORKSPACE:/workspace/roam-rewards" \
             --volume roam-rewards-release-gradle:/workspace/.gradle \
             roam-rewards-android:release \
             bash -lc 'cd /workspace/roam-rewards && pnpm install --frozen-lockfile && cd android && ./gradlew --no-daemon --stacktrace :app:assembleRelease'
 
-      - name: Test APK structure, alignment, and signature
+      - name: Verify APK structure, alignment, package, and certificate identity
+        shell: bash
         run: |
+          set -Eeuo pipefail
           docker run --rm \
             --volume "$GITHUB_WORKSPACE:/workspace/roam-rewards" \
             --env EXPECTED_PACKAGE_NAME \
@@ -88,15 +131,73 @@ jobs:
             roam-rewards-android:release \
             bash -lc 'cd /workspace/roam-rewards && bash scripts/test-signed-apk.sh android/app/build/outputs/apk/release/app-release.apk'
 
-      - name: Upload signed release APK
+      - name: Record verified APK metadata
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          release_tag="${{ inputs.release_tag }}"
+          release_tag="${release_tag:-v${GITHUB_RUN_NUMBER}}"
+
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/workspace/roam-rewards" \
+            --env EXPECTED_PACKAGE_NAME \
+            --env EXPECTED_CERT_SHA256 \
+            --env RELEASE_TAG="$release_tag" \
+            roam-rewards-android:release \
+            bash -lc '
+              set -Eeuo pipefail
+              cd /workspace/roam-rewards
+              apk="android/app/build/outputs/apk/release/app-release.apk"
+              sha256sum "$apk" | awk "{print \"APK_SHA256=\" \$1}" > release-verification.txt
+              printf "EXPECTED_PACKAGE_NAME=%s\\n" "$EXPECTED_PACKAGE_NAME" >> release-verification.txt
+              printf "EXPECTED_CERT_SHA256=%s\\n" "$EXPECTED_CERT_SHA256" >> release-verification.txt
+              printf "RELEASE_TAG=%s\\n" "$RELEASE_TAG" >> release-verification.txt
+              printf "VERIFIED_AT=%s\\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> release-verification.txt
+              apksigner verify --print-certs "$apk" >> release-verification.txt
+            '
+
+      - name: Publish verified result to the admin dashboard API
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          apk_path="android/app/build/outputs/apk/release/app-release.apk"
+          release_tag="${{ inputs.release_tag }}"
+          release_tag="${release_tag:-v${GITHUB_RUN_NUMBER}}"
+          apk_sha256="$(sha256sum "$apk_path" | awk '{print $1}')"
+          verified_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          export APK_SHA256="$apk_sha256" RELEASE_TAG="$release_tag" VERIFIED_AT="$verified_at"
+
+          curl --fail-with-body --silent --show-error --retry 3 --retry-all-errors \
+            --request POST \
+            --header "Authorization: Bearer $GITHUB_VERIFICATION_WEBHOOK_SECRET" \
+            --header "Content-Type: application/json" \
+            --data "$(python3 - <<'PY'
+          import json, os
+          print(json.dumps({
+              "status": "VERIFIED",
+              "packageName": os.environ["EXPECTED_PACKAGE_NAME"],
+              "certificateSha256": os.environ["EXPECTED_CERT_SHA256"],
+              "apkSha256": os.environ["APK_SHA256"],
+              "releaseTag": os.environ["RELEASE_TAG"],
+              "verifiedAt": os.environ["VERIFIED_AT"],
+          }))
+          PY
+            )" \
+            "$APK_VERIFICATION_STATUS_ENDPOINT"
+
+          echo "Published VERIFIED APK identity result for $release_tag"
+
+      - name: Upload verified APK and metadata artifact
         uses: actions/upload-artifact@v4
         with:
           name: roam-rewards-release-apk
-          path: android/app/build/outputs/apk/release/*.apk
+          path: |
+            android/app/build/outputs/apk/release/*.apk
+            release-verification.txt
           if-no-files-found: error
           retention-days: 14
 
-      - name: Create GitHub Release and attach signed APK
+      - name: Create GitHub Release and attach verified APK
         env:
           GH_TOKEN: ${{ github.token }}
           REQUESTED_RELEASE_TAG: ${{ inputs.release_tag }}
@@ -104,17 +205,30 @@ jobs:
         run: |
           set -Eeuo pipefail
           apk_path="$(find android/app/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' -print -quit)"
-          [[ -n "$apk_path" && -f "$apk_path" ]] || { echo "Signed APK not found" >&2; exit 1; }
+          [[ -n "$apk_path" && -f "$apk_path" ]] || {
+            echo "Signed APK not found" >&2
+            exit 1
+          }
+          [[ -s release-verification.txt ]] || {
+            echo "Release verification record not found" >&2
+            exit 1
+          }
+
           release_tag="${REQUESTED_RELEASE_TAG:-v${GITHUB_RUN_NUMBER}}"
           release_title="Roam Rewards ${release_tag}"
-          gh release create "$release_tag" "$apk_path#roam-rewards-${release_tag}.apk" \
+
+          gh release create "$release_tag" \
+            "$apk_path#roam-rewards-${release_tag}.apk" \
+            "release-verification.txt#roam-rewards-${release_tag}-verification.txt" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "$release_title" \
             --generate-notes
-          echo "Created GitHub Release $release_tag and attached signed APK"
+
+          echo "Created GitHub Release $release_tag with verified APK and metadata"
 
       - name: Remove signing material
         if: always()
         shell: bash
-        run: rm -rf .ci-signing android/release.keystore android/keystore.properties
+        run: |
+          rm -rf .ci-signing android/release.keystore android/keystore.properties

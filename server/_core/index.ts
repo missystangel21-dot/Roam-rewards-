@@ -6,6 +6,7 @@ import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
 import { registerStorageProxy } from "./storageProxy";
 import { registerMetricsRoute } from "./prometheus";
+import { assertExpectedAndroidIdentity, isValidVerificationToken, recordAndroidVerificationResult, validateAndroidVerificationResult } from "./android-release-verification";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 
@@ -61,6 +62,22 @@ async function startServer() {
 
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true, timestamp: Date.now() });
+  });
+  app.post("/api/internal/github/android-verification", (req, res) => {
+    const authorization = req.header("authorization");
+    const token = authorization?.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : undefined;
+    if (!isValidVerificationToken(token)) {
+      res.status(401).json({ error: "Verification authentication required" });
+      return;
+    }
+    try {
+      const result = validateAndroidVerificationResult(req.body);
+      assertExpectedAndroidIdentity(result);
+      const status = recordAndroidVerificationResult(result);
+      res.status(202).json({ accepted: true, status: status.status, verifiedAt: status.verifiedAt });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Invalid verification payload" });
+    }
   });
   registerMetricsRoute(app);
 

@@ -7,6 +7,7 @@ import { z } from "zod";
 import * as db from "./db";
 import { adminProcedure, adminRateLimiter, protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import { adminRateLimitMetrics, type OffenderWindow } from "./_core/admin-rate-limit-metrics";
+import { getAndroidVerificationStatus } from "./_core/android-release-verification";
 import { approvalReasonCodes, rejectionReasonCodes, reviewerReasonCodeTemplates } from "./redemption-review-rules";
 import { validateRejectionInternalNote } from "./rejection-note-rules";
 
@@ -61,22 +62,7 @@ export const appRouter = router({
       .input(z.object({ offenderWindow: z.enum(["FIFTEEN_MINUTES", "ONE_HOUR", "TWENTY_FOUR_HOURS", "SEVEN_DAYS", "THIRTY_DAYS"]).default("SEVEN_DAYS") }).optional())
       .query(({ input }) => adminRateLimitMetrics.snapshot((input?.offenderWindow ?? "SEVEN_DAYS") as OffenderWindow)),
     androidReleaseVerification: adminProcedure.query(() => {
-      const rawStatus = process.env.APK_IDENTITY_VERIFICATION_STATUS?.toUpperCase();
-      const status = rawStatus === "VERIFIED" || rawStatus === "FAILED" || rawStatus === "PENDING" ? rawStatus : "NOT_CONFIGURED";
-      return {
-        status,
-        packageName: process.env.EXPECTED_PACKAGE_NAME ?? "com.app.roamrewards",
-        certificateConfigured: Boolean(process.env.EXPECTED_CERT_SHA256),
-        releaseTag: process.env.APK_IDENTITY_RELEASE_TAG ?? null,
-        verifiedAt: process.env.APK_IDENTITY_VERIFIED_AT ?? null,
-        message: status === "VERIFIED"
-          ? "The latest recorded signed APK passed package and certificate identity checks."
-          : status === "FAILED"
-            ? "The latest recorded signed APK failed package or certificate identity checks."
-            : status === "PENDING"
-              ? "A signed APK verification is in progress or awaiting release confirmation."
-              : "No release verification result has been connected to this dashboard yet.",
-      } as const;
+      return getAndroidVerificationStatus();
     }),
     privacySettings: adminProcedure.query(() => adminRateLimitMetrics.getPrivacySettings()),
     privacyAudit: adminProcedure
