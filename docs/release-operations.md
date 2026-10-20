@@ -41,6 +41,37 @@ gh variable set EXPECTED_CERT_SHA256 \
 
 Replace the example fingerprint with the actual 32-byte, colon-separated certificate digest. The protected release workflow passes `EXPECTED_PACKAGE_NAME=com.app.roamrewards` and `EXPECTED_CERT_SHA256` into the Android container and runs with `REQUIRE_IDENTITY_ASSERTIONS=true`; a missing or malformed fingerprint stops the job before artifact upload or Release creation.
 
+### Securely derive and prepare the values
+
+Run these commands on the machine that holds the release keystore. They print only the non-secret certificate fingerprint; keep the keystore, passwords, and base64 file outside the repository:
+
+```bash
+export KEYSTORE="$HOME/secure/roam-rewards-upload.keystore"
+export KEY_ALIAS="your-release-key-alias"
+
+fingerprint="$(keytool -list -v -keystore "$KEYSTORE" -alias "$KEY_ALIAS" \
+  | awk -F': ' '/SHA256:/{print $2; exit}')"
+[[ "$fingerprint" =~ ^([[:xdigit:]][[:xdigit:]]:){31}[[:xdigit:]][[:xdigit:]]$ ]] \
+  || { echo "Unexpected SHA-256 fingerprint format" >&2; exit 1; }
+printf '%s\n' "$fingerprint"
+
+base64 -w 0 "$KEYSTORE" > "$HOME/secure/roam-rewards-upload.keystore.base64"
+chmod 600 "$HOME/secure/roam-rewards-upload.keystore.base64"
+printf '%s\n' "$fingerprint" > "$HOME/secure/android-cert-sha256"
+printf '%s\n' "$KEY_ALIAS" > "$HOME/secure/android-key-alias"
+chmod 600 "$HOME/secure/android-cert-sha256" "$HOME/secure/android-key-alias"
+```
+
+Create protected files for the passwords and callback secret using a secure password manager or editor, then lock them down:
+
+```bash
+chmod 600 "$HOME/secure/android-keystore-password" \
+  "$HOME/secure/android-key-password" \
+  "$HOME/secure/github-verification-webhook-secret"
+```
+
+Do not paste any of these values into chat, commit them, or include them in shell command history.
+
 For automatic dashboard updates, also configure the callback URL and bearer secret:
 
 ```bash

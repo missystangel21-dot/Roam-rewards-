@@ -16,6 +16,7 @@ const packageNamePattern = /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$/;
 const fingerprintPattern = /^([0-9A-Fa-f]{2}:){31}[0-9A-Fa-f]{2}$/;
 const sha256Pattern = /^[0-9A-Fa-f]{64}$/;
 let latest: AndroidVerificationResult | null = null;
+const history: AndroidVerificationResult[] = [];
 
 function configuredStatus(): AndroidVerificationStatus {
   const value = process.env.APK_IDENTITY_VERIFICATION_STATUS?.toUpperCase();
@@ -33,6 +34,13 @@ export function getAndroidVerificationStatus() {
     releaseTag: latest?.releaseTag ?? process.env.APK_IDENTITY_RELEASE_TAG ?? null,
     verifiedAt: latest?.verifiedAt ?? process.env.APK_IDENTITY_VERIFIED_AT ?? null,
     source: latest?.source ?? null,
+    history: history.map((entry) => ({
+      status: entry.status,
+      packageName: entry.packageName,
+      apkSha256: entry.apkSha256,
+      releaseTag: entry.releaseTag,
+      verifiedAt: entry.verifiedAt,
+    })),
     message: status === "VERIFIED"
       ? "The latest recorded signed APK passed package and certificate identity checks."
       : status === "FAILED"
@@ -49,6 +57,8 @@ export function recordAndroidVerificationResult(input: AndroidVerificationResult
     certificateSha256: input.certificateSha256.toUpperCase(),
     apkSha256: input.apkSha256.toLowerCase(),
   };
+  history.unshift(latest);
+  history.splice(20);
   console.info(JSON.stringify({
     event: "android_release_verification",
     status: latest.status,
