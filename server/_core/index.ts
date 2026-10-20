@@ -8,6 +8,7 @@ import { registerStorageProxy } from "./storageProxy";
 import { registerMetricsRoute } from "./prometheus";
 import { assertExpectedAndroidIdentity, isValidVerificationToken, recordAndroidVerificationResult, validateAndroidVerificationResult } from "./android-release-verification";
 import { appRouter } from "../routers";
+import * as db from "../db";
 import { createContext } from "./context";
 
 function isPortAvailable(port: number): Promise<boolean> {
@@ -63,7 +64,7 @@ async function startServer() {
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true, timestamp: Date.now() });
   });
-  app.post("/api/internal/github/android-verification", (req, res) => {
+  app.post("/api/internal/github/android-verification", async (req, res) => {
     const authorization = req.header("authorization");
     const token = authorization?.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : undefined;
     if (!isValidVerificationToken(token)) {
@@ -73,6 +74,10 @@ async function startServer() {
     try {
       const result = validateAndroidVerificationResult(req.body);
       assertExpectedAndroidIdentity(result);
+      if (!(await db.insertAndroidVerificationResult(result))) {
+        res.status(503).json({ error: "Verification history database is unavailable" });
+        return;
+      }
       const status = recordAndroidVerificationResult(result);
       res.status(202).json({ accepted: true, status: status.status, verifiedAt: status.verifiedAt });
     } catch (error) {

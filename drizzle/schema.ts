@@ -121,3 +121,24 @@ export type TrailPointLedgerEntry = typeof trailPointLedgerEntries.$inferSelect;
 export type ExplorerXpEvent = typeof explorerXpEvents.$inferSelect;
 export type RedemptionRequest = typeof redemptionRequests.$inferSelect;
 export type RedemptionReviewEvent = typeof redemptionReviewEvents.$inferSelect;
+
+/** Immutable results received from the protected GitHub Android release workflow. */
+export const androidVerificationResults = mysqlTable(
+  "android_verification_results",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    status: mysqlEnum("status", ["VERIFIED", "FAILED", "PENDING"]).notNull(),
+    packageName: varchar("packageName", { length: 255 }).notNull(),
+    certificateSha256: varchar("certificateSha256", { length: 95 }).notNull(),
+    apkSha256: varchar("apkSha256", { length: 64 }).notNull(),
+    releaseTag: varchar("releaseTag", { length: 128 }),
+    verifiedAt: timestamp("verifiedAt").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => [
+    index("ix_android_verification_status_time").on(table.status, table.verifiedAt),
+    index("ix_android_verification_time").on(table.verifiedAt),
+  ],
+);
+
+export type AndroidVerificationResultRow = typeof androidVerificationResults.$inferSelect;

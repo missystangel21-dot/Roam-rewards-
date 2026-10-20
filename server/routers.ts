@@ -61,9 +61,31 @@ export const appRouter = router({
     metrics: adminProcedure
       .input(z.object({ offenderWindow: z.enum(["FIFTEEN_MINUTES", "ONE_HOUR", "TWENTY_FOUR_HOURS", "SEVEN_DAYS", "THIRTY_DAYS"]).default("SEVEN_DAYS") }).optional())
       .query(({ input }) => adminRateLimitMetrics.snapshot((input?.offenderWindow ?? "SEVEN_DAYS") as OffenderWindow)),
-    androidReleaseVerification: adminProcedure.query(() => {
-      return getAndroidVerificationStatus();
-    }),
+    androidReleaseVerification: adminProcedure
+      .input(z.object({ limit: z.number().int().min(1).max(100).default(10), page: z.number().int().min(0).default(0), status: z.enum(["ALL", "VERIFIED", "FAILED", "PENDING"]).default("ALL"), dateFrom: z.string().datetime().optional(), dateTo: z.string().datetime().optional() }).optional())
+      .query(async ({ input }) => {
+        const status = getAndroidVerificationStatus();
+        const query = { limit: input?.limit ?? 10, page: input?.page ?? 0, status: input?.status ?? "ALL", dateFrom: input?.dateFrom, dateTo: input?.dateTo };
+        const persisted = await db.getAndroidVerificationHistory({ limit: query.limit, page: query.page, status: query.status !== "ALL" ? query.status : undefined, dateFrom: query.dateFrom ? new Date(query.dateFrom) : undefined, dateTo: query.dateTo ? new Date(query.dateTo) : undefined });
+        const persistedLatest = await db.getAndroidVerificationHistory({ limit: 1, page: 0 });
+        const latest = persistedLatest?.items[0];
+        const latestStatus = latest?.status ?? status.status;
+        return {
+          ...status,
+          status: latestStatus,
+          packageName: latest?.packageName ?? status.packageName,
+          apkSha256: latest?.apkSha256 ?? status.apkSha256,
+          releaseTag: latest?.releaseTag ?? status.releaseTag,
+          verifiedAt: latest?.verifiedAt ?? status.verifiedAt,
+          certificateConfigured: Boolean(latest || status.certificateConfigured),
+          message: latestStatus === "VERIFIED" ? "The latest recorded signed APK passed package and certificate identity checks." : latestStatus === "FAILED" ? "The latest recorded signed APK failed package or certificate identity checks." : latestStatus === "PENDING" ? "A signed APK verification is in progress or awaiting release confirmation." : status.message,
+          history: persisted?.items ?? status.history.slice((query.page ?? 0) * (query.limit ?? 10), (query.page ?? 0) * (query.limit ?? 10) + (query.limit ?? 10)),
+          historyHasMore: persisted?.hasMore ?? status.history.length > ((query.page ?? 0) + 1) * (query.limit ?? 10),
+          historyPage: query.page ?? 0,
+          historyLimit: query.limit ?? 10,
+          historyPersistent: Boolean(persisted),
+        };
+      }),
     privacySettings: adminProcedure.query(() => adminRateLimitMetrics.getPrivacySettings()),
     privacyAudit: adminProcedure
       .input(z.object({ limit: z.number().int().min(1).max(100).default(10), page: z.number().int().min(0).default(0), dateFrom: z.string().datetime().optional(), dateTo: z.string().datetime().optional() }).optional())

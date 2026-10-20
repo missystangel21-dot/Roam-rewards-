@@ -1,6 +1,6 @@
 import { and, desc, eq, gte, inArray, lt, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { explorerXpEvents, InsertUser, redemptionRequests, redemptionReviewEvents, rewardAccounts, trailPointLedgerEntries, users } from "../drizzle/schema";
+import { androidVerificationResults, explorerXpEvents, InsertUser, redemptionRequests, redemptionReviewEvents, rewardAccounts, trailPointLedgerEntries, users } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 import { getAdminRedemptionTransition, getApprovalDecision, type RedemptionStatus } from "./redemption-review-rules";
 
@@ -93,6 +93,32 @@ export async function getUserByOpenId(openId: string) {
 const POINTS_PER_DOLLAR = 100;
 const SIMULATED_REDEMPTION_MINIMUM = 500;
 const EXPLORER_XP_PER_LEVEL = 100;
+
+export async function insertAndroidVerificationResult(input: { status: "VERIFIED" | "FAILED" | "PENDING"; packageName: string; certificateSha256: string; apkSha256: string; releaseTag: string | null; verifiedAt: string }) {
+  const db = await getDb();
+  if (!db) return false;
+  await db.insert(androidVerificationResults).values({ ...input, verifiedAt: new Date(input.verifiedAt) });
+  return true;
+}
+
+export async function getAndroidVerificationHistory(input: { limit: number; page: number; status?: "VERIFIED" | "FAILED" | "PENDING"; dateFrom?: Date; dateTo?: Date }) {
+  const db = await getDb();
+  if (!db) return null;
+  const filters = [
+    input.status ? eq(androidVerificationResults.status, input.status) : undefined,
+    input.dateFrom ? gte(androidVerificationResults.verifiedAt, input.dateFrom) : undefined,
+    input.dateTo ? lt(androidVerificationResults.verifiedAt, input.dateTo) : undefined,
+  ].filter(Boolean) as Array<ReturnType<typeof eq>>;
+  const rows = await db
+    .select({ status: androidVerificationResults.status, packageName: androidVerificationResults.packageName, apkSha256: androidVerificationResults.apkSha256, releaseTag: androidVerificationResults.releaseTag, verifiedAt: androidVerificationResults.verifiedAt })
+    .from(androidVerificationResults)
+    .where(filters.length ? and(...filters) : undefined)
+    .orderBy(desc(androidVerificationResults.verifiedAt), desc(androidVerificationResults.id))
+    .limit(input.limit + 1)
+    .offset(input.page * input.limit);
+  const hasMore = rows.length > input.limit;
+  return { items: rows.slice(0, input.limit).map((row) => ({ ...row, verifiedAt: row.verifiedAt.toISOString() })), hasMore };
+}
 
 export class RewardTransactionError extends Error {
   constructor(public readonly code: "INSUFFICIENT_TRAIL_POINTS" | "REDEMPTION_MINIMUM_NOT_MET" | "INVALID_REDEMPTION_AMOUNT" | "DATABASE_UNAVAILABLE" | "REDEMPTION_NOT_FOUND" | "INVALID_REDEMPTION_STATE") {

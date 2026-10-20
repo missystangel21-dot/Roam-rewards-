@@ -195,3 +195,5 @@ GITHUB_VERIFICATION_WEBHOOK_SECRET=<same-callback-secret>
 ```
 
 Set `APK_IDENTITY_VERIFICATION_STATUS=FAILED` when either identity assertion fails. The dashboard procedure is admin-only and refreshes every 30 seconds. `NOT CONFIGURED` is intentionally shown until a real release result is connected; it is not a successful verification.
+
+Verification callbacks are persisted in the MySQL table `android_verification_results`, so the latest status and history survive API restarts. The protected dashboard supports server-side status filtering (`ALL`, `VERIFIED`, `FAILED`, `PENDING`), one-day date filtering, and Previous/Next pagination. The history query refreshes every 30 seconds without a page reload. **Export CSV** downloads up to the first 100 records matching the active status and date filters; the export includes status, release tag, package, full APK SHA-256, and UTC verification timestamp.

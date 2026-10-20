@@ -36,6 +36,13 @@
       "when": 1788004557551,
       "tag": "0004_classy_lady_vermin",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "5",
+      "when": 1792506427351,
+      "tag": "0005_chunky_yellow_claw",
+      "breakpoints": true
     }
   ]
 }
