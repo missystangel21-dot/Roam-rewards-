@@ -9,6 +9,9 @@ on:
     paths:
       - "monitoring/**"
 
+permissions:
+  contents: read
+
 jobs:
   validate-prometheus-alerts:
     runs-on: ubuntu-latest
