@@ -72,21 +72,28 @@ export class RateLimitMetrics {
     this.redisOffenderPrefix = key;
   }
 
-  recordAllowed() { this.allowedRequests += 1; }
+  recordAllowed() {
+    this.allowedRequests += 1;
+  }
 
   async recordDenied(subject?: string) {
     this.deniedRequests += 1;
     if (!subject) return;
+
     await this.loadSharedSettings();
     const displaySubject = formatSubject(subject, this.settings.identifierVisibility);
     this.deniedBySubject.set(displaySubject, (this.deniedBySubject.get(displaySubject) ?? 0) + 1);
+
     if (!this.redis) return;
+
     try {
-      await Promise.all(ALL_WINDOWS.map(async (window) => {
+      const writes = ALL_WINDOWS.map(async (window) => {
         const bucket = getBucketKey(this.redisOffenderPrefix, window);
         await this.redis!.hIncrBy(bucket, displaySubject, 1);
         await this.redis!.expire(bucket, this.settings.retentionDays * 24 * 60 * 60);
-      }));
+      });
+
+      await Promise.allSettled(writes);
     } catch (error) {
       console.warn("[AdminRateLimitMetrics] Redis offender aggregation unavailable:", error);
     }
@@ -103,8 +110,10 @@ export class RateLimitMetrics {
 
   async snapshot(offenderWindow: OffenderWindow = "SEVEN_DAYS"): Promise<RateLimitMetricsSnapshot> {
     await this.loadSharedSettings();
+
     let offenderEntries: Array<[string, number]> = [...this.deniedBySubject.entries()];
     let spikeAlerts: RateLimitMetricsSnapshot["spikeAlerts"] = [];
+
     if (this.redis) {
       try {
         const values = await this.readWindowBuckets(offenderWindow);
@@ -114,14 +123,23 @@ export class RateLimitMetrics {
         console.warn("[AdminRateLimitMetrics] Redis offender snapshot unavailable:", error);
       }
     }
+
     return {
       allowedRequests: this.allowedRequests,
       deniedRequests: this.deniedRequests,
       redisCalls: this.redisCalls,
-      redisLatencyMs: { count: this.redisCalls, total: this.redisLatencyTotal, max: this.redisLatencyMax, average: this.redisCalls === 0 ? 0 : this.redisLatencyTotal / this.redisCalls },
+      redisLatencyMs: {
+        count: this.redisCalls,
+        total: this.redisLatencyTotal,
+        max: this.redisLatencyMax,
+        average: this.redisCalls === 0 ? 0 : this.redisLatencyTotal / this.redisCalls,
+      },
       recentRedisLatencyMs: [...this.recentRedisLatency],
       offenderWindow,
-      topDeniedSubjects: offenderEntries.sort(([, left], [, right]) => right - left).slice(0, 10).map(([subject, deniedRequests]) => ({ subject, deniedRequests })),
+      topDeniedSubjects: offenderEntries
+        .sort(([, left], [, right]) => right - left)
+        .slice(0, 10)
+        .map(([subject, deniedRequests]) => ({ subject, deniedRequests })),
       spikeAlerts,
     };
   }
@@ -131,30 +149,43 @@ export class RateLimitMetrics {
     return { ...this.settings };
   }
 
-  async updatePrivacySettings(adminUserId: number, update: Partial<Pick<RateLimitPrivacySettings, "retentionDays" | "identifierVisibility" | "spikeThreshold" | "spikeMultiplier">>) {
+  async updatePrivacySettings(
+    adminUserId: number,
+    update: Partial<Pick<RateLimitPrivacySettings, "retentionDays" | "identifierVisibility" | "spikeThreshold" | "spikeMultiplier">>,
+  ) {
     await this.loadSharedSettings();
     const changes: RateLimitAuditEvent[] = [];
+
     if (update.retentionDays !== undefined && update.retentionDays !== this.settings.retentionDays) {
       const nextValue = validateRetention(update.retentionDays);
       changes.push(this.makeAudit(adminUserId, "retentionDays", String(this.settings.retentionDays), String(nextValue)));
       this.settings.retentionDays = nextValue;
     }
+
     if (update.identifierVisibility !== undefined && update.identifierVisibility !== this.settings.identifierVisibility) {
       changes.push(this.makeAudit(adminUserId, "identifierVisibility", this.settings.identifierVisibility, update.identifierVisibility));
       this.settings.identifierVisibility = update.identifierVisibility;
     }
+
     if (update.spikeThreshold !== undefined && update.spikeThreshold !== this.settings.spikeThreshold) {
       const nextValue = validateSpikeThreshold(update.spikeThreshold);
       changes.push(this.makeAudit(adminUserId, "spikeThreshold", String(this.settings.spikeThreshold), String(nextValue)));
       this.settings.spikeThreshold = nextValue;
     }
+
     if (update.spikeMultiplier !== undefined && update.spikeMultiplier !== this.settings.spikeMultiplier) {
       const nextValue = validateSpikeMultiplier(update.spikeMultiplier);
       changes.push(this.makeAudit(adminUserId, "spikeMultiplier", String(this.settings.spikeMultiplier), String(nextValue)));
       this.settings.spikeMultiplier = nextValue;
     }
+
     if (this.redis && changes.length) {
-      await this.redis.hSet(this.configKey, { retentionDays: String(this.settings.retentionDays), identifierVisibility: this.settings.identifierVisibility, spikeThreshold: String(this.settings.spikeThreshold), spikeMultiplier: String(this.settings.spikeMultiplier) });
+      await this.redis.hSet(this.configKey, {
+        retentionDays: String(this.settings.retentionDays),
+        identifierVisibility: this.settings.identifierVisibility,
+        spikeThreshold: String(this.settings.spikeThreshold),
+        spikeMultiplier: String(this.settings.spikeMultiplier),
+      });
       await this.redis.expire(this.configKey, 30 * 24 * 60 * 60);
       for (const event of changes) {
         await this.redis.rPush(this.auditKey, JSON.stringify(event));
@@ -162,6 +193,7 @@ export class RateLimitMetrics {
         await this.redis.expire(this.auditKey, 30 * 24 * 60 * 60);
       }
     }
+
     this.localAuditEvents.push(...changes);
     return { settings: await this.getPrivacySettings(), changes };
   }
@@ -169,8 +201,9 @@ export class RateLimitMetrics {
   async auditEvents(options: { limit?: number; page?: number; dateFrom?: Date; dateTo?: Date } = {}): Promise<{ items: RateLimitAuditEvent[]; page: number; hasMore: boolean }> {
     const limit = Math.min(options.limit ?? 10, 100);
     const page = Math.max(0, options.page ?? 0);
-    let events: RateLimitAuditEvent[];
-    if (!this.redis) events = [...this.localAuditEvents].reverse();
+
+    let events: RateLimitAuditEvent[] = [...this.localAuditEvents].reverse();
+
     try {
       if (this.redis) {
         const values = await this.redis.lRange(this.auditKey, 0, -1);
@@ -180,9 +213,19 @@ export class RateLimitMetrics {
       console.warn("[AdminRateLimitMetrics] Redis audit log unavailable:", error);
       events = [...this.localAuditEvents].reverse();
     }
-    events = events!.filter((event) => (!options.dateFrom || new Date(event.occurredAt) >= options.dateFrom!) && (!options.dateTo || new Date(event.occurredAt) <= options.dateTo!));
+
+    const filtered = events.filter(
+      (event) =>
+        (!options.dateFrom || new Date(event.occurredAt) >= options.dateFrom) &&
+        (!options.dateTo || new Date(event.occurredAt) <= options.dateTo),
+    );
+
     const start = page * limit;
-    return { items: events.slice(start, start + limit), page, hasMore: start + limit < events.length };
+    return {
+      items: filtered.slice(start, start + limit),
+      page,
+      hasMore: start + limit < filtered.length,
+    };
   }
 
   private async loadSharedSettings() {
@@ -190,7 +233,9 @@ export class RateLimitMetrics {
     try {
       const values = await this.redis.hGetAll(this.configKey);
       if (values.retentionDays) this.settings.retentionDays = validateRetention(Number(values.retentionDays));
-      if (values.identifierVisibility === "FULL" || values.identifierVisibility === "MASKED") this.settings.identifierVisibility = values.identifierVisibility;
+      if (values.identifierVisibility === "FULL" || values.identifierVisibility === "MASKED") {
+        this.settings.identifierVisibility = values.identifierVisibility;
+      }
       if (values.spikeThreshold) this.settings.spikeThreshold = validateSpikeThreshold(Number(values.spikeThreshold));
       if (values.spikeMultiplier) this.settings.spikeMultiplier = validateSpikeMultiplier(Number(values.spikeMultiplier));
     } catch (error) {
@@ -203,10 +248,13 @@ export class RateLimitMetrics {
     const now = Math.floor(Date.now() / 1000);
     const firstBucket = Math.floor((now - bucketSeconds) / bucketSeconds);
     const lastBucket = Math.floor(now / bucketSeconds);
+
     const aggregate: Record<string, number> = {};
     for (let bucket = firstBucket; bucket <= lastBucket; bucket += 1) {
       const values = await this.redis!.hGetAll(`${this.redisOffenderPrefix}:${window}:${bucket}`);
-      for (const [subject, count] of Object.entries(values)) aggregate[subject] = (aggregate[subject] ?? 0) + Number(count);
+      for (const [subject, count] of Object.entries(values)) {
+        aggregate[subject] = (aggregate[subject] ?? 0) + Number(count);
+      }
     }
     return aggregate;
   }
@@ -214,28 +262,76 @@ export class RateLimitMetrics {
   private async readSpikeAlerts(window: OffenderWindow) {
     const current = await this.redis!.hGetAll(getBucketKey(this.redisOffenderPrefix, window));
     const previous = await this.redis!.hGetAll(getBucketKey(this.redisOffenderPrefix, window, Date.now() - WINDOW_SECONDS[window] * 1_000));
+
     return Object.entries(current)
-      .map(([subject, value]) => ({ subject, currentDenials: Number(value), previousDenials: Number(previous[subject] ?? 0), multiplier: Number(value) / Math.max(1, Number(previous[subject] ?? 0)) }))
+      .map(([subject, value]) => {
+        const currentDenials = Number(value);
+        const previousDenials = Number(previous[subject] ?? 0);
+        return {
+          subject,
+          currentDenials,
+          previousDenials,
+          multiplier: currentDenials / Math.max(1, previousDenials),
+        };
+      })
       .filter((item) => item.currentDenials >= this.settings.spikeThreshold && item.multiplier >= this.settings.spikeMultiplier)
       .sort((left, right) => right.multiplier - left.multiplier)
       .slice(0, 10);
   }
 
-  private makeAudit(adminUserId: number, setting: RateLimitAuditEvent["setting"], previousValue: string, nextValue: string): RateLimitAuditEvent {
+  private makeAudit(
+    adminUserId: number,
+    setting: RateLimitAuditEvent["setting"],
+    previousValue: string,
+    nextValue: string,
+  ): RateLimitAuditEvent {
     return { id: crypto.randomUUID(), occurredAt: new Date().toISOString(), adminUserId, setting, previousValue, nextValue };
   }
 
   reset() {
-    this.allowedRequests = 0; this.deniedRequests = 0; this.redisCalls = 0; this.redisLatencyTotal = 0; this.redisLatencyMax = 0; this.recentRedisLatency.length = 0; this.deniedBySubject.clear(); this.localAuditEvents.length = 0;
+    this.allowedRequests = 0;
+    this.deniedRequests = 0;
+    this.redisCalls = 0;
+    this.redisLatencyTotal = 0;
+    this.redisLatencyMax = 0;
+    this.recentRedisLatency.length = 0;
+    this.deniedBySubject.clear();
+    this.localAuditEvents.length = 0;
   }
 }
 
-function getBucketKey(prefix: string, window: OffenderWindow, now = Date.now()) { return `${prefix}:${window}:${Math.floor(now / (WINDOW_SECONDS[window] * 1_000))}`; }
-function formatSubject(subject: string, visibility: IdentifierVisibility) { if (visibility === "FULL") return subject; return `admin-${createHash("sha256").update(subject).digest("hex").slice(0, 12)}`; }
-function validateRetention(value: number) { if (!Number.isInteger(value) || value < 1 || value > 30) throw new Error("Retention must be an integer from 1 to 30 days"); return value; }
-function validateSpikeThreshold(value: number) { if (!Number.isInteger(value) || value < 1 || value > 1_000_000) throw new Error("Spike threshold must be a positive integer"); return value; }
-function validateSpikeMultiplier(value: number) { if (!Number.isFinite(value) || value < 1 || value > 100) throw new Error("Spike multiplier must be between 1 and 100"); return value; }
-function readBoundedInt(name: string, fallback: number, min: number, max: number) { const value = Number.parseInt(process.env[name] ?? "", 10); return Number.isInteger(value) && value >= min && value <= max ? value : fallback; }
-function readBoundedNumber(name: string, fallback: number, min: number, max: number) { const value = Number(process.env[name] ?? ""); return Number.isFinite(value) && value >= min && value <= max ? value : fallback; }
+function getBucketKey(prefix: string, window: OffenderWindow, now = Date.now()) {
+  return `${prefix}:${window}:${Math.floor(now / (WINDOW_SECONDS[window] * 1_000))}`;
+}
+
+function formatSubject(subject: string, visibility: IdentifierVisibility) {
+  if (visibility === "FULL") return subject;
+  return `admin-${createHash("sha256").update(subject).digest("hex").slice(0, 12)}`;
+}
+
+function validateRetention(value: number) {
+  if (!Number.isInteger(value) || value < 1 || value > 30) throw new Error("Retention must be an integer from 1 to 30 days");
+  return value;
+}
+
+function validateSpikeThreshold(value: number) {
+  if (!Number.isInteger(value) || value < 1 || value > 1_000_000) throw new Error("Spike threshold must be a positive integer");
+  return value;
+}
+
+function validateSpikeMultiplier(value: number) {
+  if (!Number.isFinite(value) || value < 1 || value > 100) throw new Error("Spike multiplier must be between 1 and 100");
+  return value;
+}
+
+function readBoundedInt(name: string, fallback: number, min: number, max: number) {
+  const value = Number.parseInt(process.env[name] ?? "", 10);
+  return Number.isInteger(value) && value >= min && value <= max ? value : fallback;
+}
+
+function readBoundedNumber(name: string, fallback: number, min: number, max: number) {
+  const value = Number(process.env[name] ?? "");
+  return Number.isFinite(value) && value >= min && value <= max ? value : fallback;
+}
 
 export const adminRateLimitMetrics = new RateLimitMetrics();
