@@ -25,3 +25,7 @@ secrets:
   redis_url:
     external: true
     name: ${ROAM_REWARDS_REDIS_URL_SECRET:-roam-rewards-redis-url}
+
+docker secret ls \
+  --format '{{.Name}}' |
+  grep -E '^roam-rewards-(database-url|jwt-secret|redis-url)$'
