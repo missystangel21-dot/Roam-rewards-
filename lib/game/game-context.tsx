@@ -2,9 +2,9 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Haptics from "expo-haptics";
 import * as Location from "expo-location";
 import { useRouter } from "expo-router";
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
-import { DAILY_POINT_CAP, initialBeacons, REDEMPTION_MINIMUM } from "./game-data";
+import { DAILY_POINT_CAP, initialBeacons } from "./game-data";
 import { calculateAvailablePoints, calculateTodayEarnedPoints, canAwardExplorerXp, canRequestSimulatedRedemption } from "./reward-rules";
 import type { Beacon, LedgerEntry, LocationState } from "./types";
 
@@ -41,10 +41,6 @@ type GameContextValue = {
 
 const GameContext = createContext<GameContextValue | undefined>(undefined);
 
-function dateKey(value: string) {
-  return new Date(value).toDateString();
-}
-
 export function GameProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
   const [completedBeaconIds, setCompletedBeaconIds] = useState<string[]>([]);
@@ -54,11 +50,16 @@ export function GameProvider({ children }: { children: ReactNode }) {
   const [explorerXp, setExplorerXp] = useState(0);
   const [adRewardedBeaconIds, setAdRewardedBeaconIds] = useState<string[]>([]);
   const [isReady, setIsReady] = useState(false);
+  const persistenceQueue = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => {
-    AsyncStorage.getItem(STORE_KEY)
-      .then((raw) => {
-        if (!raw) return;
+    let isMounted = true;
+
+    const loadSavedGame = async () => {
+      try {
+        const raw = await AsyncStorage.getItem(STORE_KEY);
+        if (!raw || !isMounted) return;
+
         const saved = JSON.parse(raw) as StoredGame;
         setCompletedBeaconIds(saved.completedBeaconIds ?? []);
         setLedger(saved.ledger ?? []);
@@ -66,41 +67,72 @@ export function GameProvider({ children }: { children: ReactNode }) {
         setEligibilityAccepted(saved.eligibilityAccepted ?? false);
         setExplorerXp(saved.explorerXp ?? 0);
         setAdRewardedBeaconIds(saved.adRewardedBeaconIds ?? []);
-      })
-      .finally(() => setIsReady(true));
+      } catch (error) {
+        // Bad or unavailable local storage should not prevent the app from opening.
+        console.warn("[Game] Unable to load saved progress:", error);
+      } finally {
+        if (isMounted) setIsReady(true);
+      }
+    };
+
+    void loadSavedGame();
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   useEffect(() => {
     if (!isReady) return;
-    AsyncStorage.setItem(STORE_KEY, JSON.stringify({ completedBeaconIds, ledger, location, eligibilityAccepted, explorerXp, adRewardedBeaconIds }));
+
+    const serialized = JSON.stringify({ completedBeaconIds, ledger, location, eligibilityAccepted, explorerXp, adRewardedBeaconIds });
+    // Serialize writes so slower earlier writes cannot overwrite newer progress.
+    persistenceQueue.current = persistenceQueue.current
+      .catch(() => undefined)
+      .then(() => AsyncStorage.setItem(STORE_KEY, serialized))
+      .catch((error) => {
+        console.warn("[Game] Unable to save progress:", error);
+      });
   }, [adRewardedBeaconIds, completedBeaconIds, eligibilityAccepted, explorerXp, isReady, ledger, location]);
 
   const points = useMemo(() => calculateAvailablePoints(ledger), [ledger]);
   const todayPoints = useMemo(() => calculateTodayEarnedPoints(ledger), [ledger]);
+  const completedBeaconIdSet = useMemo(() => new Set(completedBeaconIds), [completedBeaconIds]);
+  const adRewardedBeaconIdSet = useMemo(() => new Set(adRewardedBeaconIds), [adRewardedBeaconIds]);
 
   const beacons = useMemo(
-    () => initialBeacons.map((beacon) => ({ ...beacon, available: !completedBeaconIds.includes(beacon.id) })),
-    [completedBeaconIds],
+    () => initialBeacons.map((beacon) => ({ ...beacon, available: !completedBeaconIdSet.has(beacon.id) })),
+    [completedBeaconIdSet],
   );
+  const beaconById = useMemo(() => new Map(beacons.map((beacon) => [beacon.id, beacon])), [beacons]);
 
-  const requestLocation = async () => {
-    const serviceEnabled = await Location.hasServicesEnabledAsync();
-    const { status } = await Location.requestForegroundPermissionsAsync();
-    if (!serviceEnabled || status !== "granted") {
+  const getBeacon = useCallback((id: string) => beaconById.get(id), [beaconById]);
+  const acceptEligibility = useCallback(() => setEligibilityAccepted(true), []);
+
+  const requestLocation = useCallback(async () => {
+    try {
+      const serviceEnabled = await Location.hasServicesEnabledAsync();
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (!serviceEnabled || status !== "granted") {
+        setLocation({ label: "Demo explorer area", enabled: false });
+        return;
+      }
+
+      const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      setLocation({
+        label: "Live foreground location",
+        enabled: true,
+        accuracyMeters: Math.round(position.coords.accuracy ?? 0),
+      });
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+    } catch (error) {
+      console.warn("[Game] Unable to obtain location:", error);
       setLocation({ label: "Demo explorer area", enabled: false });
-      return;
     }
-    const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-    setLocation({
-      label: "Live foreground location",
-      enabled: true,
-      accuracyMeters: Math.round(position.coords.accuracy ?? 0),
-    });
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-  };
+  }, []);
 
-  const completeBeacon = (beacon: Beacon) => {
-    if (completedBeaconIds.includes(beacon.id) || todayPoints + beacon.pointValue > DAILY_POINT_CAP) return;
+  const completeBeacon = useCallback((beacon: Beacon) => {
+    if (completedBeaconIdSet.has(beacon.id) || todayPoints + beacon.pointValue > DAILY_POINT_CAP) return;
+
     const entry: LedgerEntry = {
       id: `earn-${beacon.id}-${Date.now()}`,
       type: "earn",
@@ -111,12 +143,13 @@ export function GameProvider({ children }: { children: ReactNode }) {
     };
     setCompletedBeaconIds((current) => [...current, beacon.id]);
     setLedger((current) => [entry, ...current]);
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
     router.replace({ pathname: "/quest-complete", params: { beaconId: beacon.id } });
-  };
+  }, [completedBeaconIdSet, router, todayPoints]);
 
-  const requestRedemption = (amount: number) => {
+  const requestRedemption = useCallback((amount: number) => {
     if (!canRequestSimulatedRedemption(points, amount)) return false;
+
     const entry: LedgerEntry = {
       id: `redeem-${Date.now()}`,
       type: "redeem",
@@ -126,54 +159,72 @@ export function GameProvider({ children }: { children: ReactNode }) {
       status: "pending",
     };
     setLedger((current) => [entry, ...current]);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
     return true;
-  };
+  }, [points]);
 
-  const isAdRewardAvailable = (beaconId: string) => completedBeaconIds.includes(beaconId) && !adRewardedBeaconIds.includes(beaconId);
+  const isAdRewardAvailable = useCallback(
+    (beaconId: string) => completedBeaconIdSet.has(beaconId) && !adRewardedBeaconIdSet.has(beaconId),
+    [adRewardedBeaconIdSet, completedBeaconIdSet],
+  );
 
-  const awardExplorerXp = (beaconId: string) => {
-    if (!canAwardExplorerXp({ beaconWasVerified: completedBeaconIds.includes(beaconId), adAlreadyRewarded: adRewardedBeaconIds.includes(beaconId) })) return false;
+  const awardExplorerXp = useCallback((beaconId: string) => {
+    if (!canAwardExplorerXp({ beaconWasVerified: completedBeaconIdSet.has(beaconId), adAlreadyRewarded: adRewardedBeaconIdSet.has(beaconId) })) return false;
+
     setExplorerXp((current) => current + 25);
     setAdRewardedBeaconIds((current) => [...current, beaconId]);
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
     return true;
-  };
+  }, [adRewardedBeaconIdSet, completedBeaconIdSet]);
 
-  const clearDemoProgress = () => {
+  const clearDemoProgress = useCallback(() => {
     setCompletedBeaconIds([]);
     setLedger([]);
     setLocation({ label: "Demo explorer area", enabled: false });
     setEligibilityAccepted(false);
     setExplorerXp(0);
     setAdRewardedBeaconIds([]);
-  };
+  }, []);
 
-  return (
-    <GameContext.Provider
-      value={{
-        beacons,
-        completedBeaconIds,
-        ledger,
-        location,
-        points,
-        todayPoints,
-        isReady,
-        eligibilityAccepted,
-        explorerXp,
-        getBeacon: (id) => beacons.find((beacon) => beacon.id === id),
-        acceptEligibility: () => setEligibilityAccepted(true),
-        isAdRewardAvailable,
-        awardExplorerXp,
-        requestLocation,
-        completeBeacon,
-        requestRedemption,
-        clearDemoProgress,
-      }}
-    >
-      {children}
-    </GameContext.Provider>
-  );
+  const value = useMemo<GameContextValue>(() => ({
+    beacons,
+    completedBeaconIds,
+    ledger,
+    location,
+    points,
+    todayPoints,
+    isReady,
+    eligibilityAccepted,
+    explorerXp,
+    getBeacon,
+    acceptEligibility,
+    isAdRewardAvailable,
+    awardExplorerXp,
+    requestLocation,
+    completeBeacon,
+    requestRedemption,
+    clearDemoProgress,
+  }), [
+    acceptEligibility,
+    awardExplorerXp,
+    beacons,
+    clearDemoProgress,
+    completeBeacon,
+    completedBeaconIds,
+    eligibilityAccepted,
+    explorerXp,
+    getBeacon,
+    isAdRewardAvailable,
+    isReady,
+    ledger,
+    location,
+    points,
+    requestLocation,
+    requestRedemption,
+    todayPoints,
+  ]);
+
+  return <GameContext.Provider value={value}>{children}</GameContext.Provider>;
 }
 
 export function useGame() {
