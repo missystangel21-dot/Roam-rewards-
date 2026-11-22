@@ -16,6 +16,9 @@ services:
       - database_url
       - jwt_secret
       - redis_url
+
+docker secret ls --format '{{.Name}}' |
+  grep -E '^roam-rewards-(database-url|jwt-secret|redis-url)$'
     ports:
       - "${API_PORT:-3000}:3000"
 
