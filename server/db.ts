@@ -153,14 +153,20 @@ async function ensureRewardAccount(db: Awaited<ReturnType<typeof getDb>>, userId
 
 export async function getRewardSummary(userId: number) {
   const db = await requireDb();
-  await ensureRewardAccount(db, userId);
-  const account = (await db.select().from(rewardAccounts).where(eq(rewardAccounts.userId, userId)).limit(1))[0];
   const todayStart = new Date();
   todayStart.setUTCHours(0, 0, 0, 0);
-  const todayCredits = await db
-    .select({ total: sql<number>`coalesce(sum(case when ${trailPointLedgerEntries.direction} = 'CREDIT' then ${trailPointLedgerEntries.points} else 0 end), 0)` })
-    .from(trailPointLedgerEntries)
-    .where(and(eq(trailPointLedgerEntries.userId, userId), gte(trailPointLedgerEntries.createdAt, todayStart)));
+  // The today's-credits sum does not depend on the account row, so run it
+  // alongside the ensure + account lookup instead of waiting for them.
+  const [account, todayCredits] = await Promise.all([
+    (async () => {
+      await ensureRewardAccount(db, userId);
+      return (await db.select().from(rewardAccounts).where(eq(rewardAccounts.userId, userId)).limit(1))[0];
+    })(),
+    db
+      .select({ total: sql<number>`coalesce(sum(case when ${trailPointLedgerEntries.direction} = 'CREDIT' then ${trailPointLedgerEntries.points} else 0 end), 0)` })
+      .from(trailPointLedgerEntries)
+      .where(and(eq(trailPointLedgerEntries.userId, userId), gte(trailPointLedgerEntries.createdAt, todayStart))),
+  ]);
   const availablePoints = account?.trailPointBalance ?? 0;
   return {
     trailPoints: {
@@ -182,9 +188,12 @@ export async function getTrailPointLedger(userId: number, limit: number) {
 
 export async function getExplorerXpActivity(userId: number, limit: number) {
   const db = await requireDb();
-  const events = await db.select().from(explorerXpEvents).where(eq(explorerXpEvents.userId, userId)).orderBy(desc(explorerXpEvents.createdAt)).limit(limit);
-  const account = (await db.select().from(rewardAccounts).where(eq(rewardAccounts.userId, userId)).limit(1))[0];
-  return { events, progress: calculateLevelProgress(account?.explorerXpBalance ?? 0) };
+  // The events list and the account row are independent reads; run them together.
+  const [events, account] = await Promise.all([
+    db.select().from(explorerXpEvents).where(eq(explorerXpEvents.userId, userId)).orderBy(desc(explorerXpEvents.createdAt)).limit(limit),
+    db.select().from(rewardAccounts).where(eq(rewardAccounts.userId, userId)).limit(1),
+  ]);
+  return { events, progress: calculateLevelProgress(account[0]?.explorerXpBalance ?? 0) };
 }
 
 /**

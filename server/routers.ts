@@ -67,7 +67,11 @@ export const appRouter = router({
         const status = getAndroidVerificationStatus();
         const query = { limit: input?.limit ?? 10, page: input?.page ?? 0, status: input?.status ?? "ALL", dateFrom: input?.dateFrom, dateTo: input?.dateTo };
         const persisted = await db.getAndroidVerificationHistory({ limit: query.limit, page: query.page, status: query.status !== "ALL" ? query.status : undefined, dateFrom: query.dateFrom ? new Date(query.dateFrom) : undefined, dateTo: query.dateTo ? new Date(query.dateTo) : undefined });
-        const persistedLatest = await db.getAndroidVerificationHistory({ limit: 1, page: 0 });
+        // The unfiltered first page already starts with the overall latest row,
+        // so a second query for it would be a duplicate round trip. Only fetch
+        // it separately when the page query is filtered or paged.
+        const unfilteredFirstPage = query.page === 0 && query.status === "ALL" && !query.dateFrom && !query.dateTo;
+        const persistedLatest = unfilteredFirstPage ? persisted : await db.getAndroidVerificationHistory({ limit: 1, page: 0 });
         const latest = persistedLatest?.items[0];
         const latestStatus = latest?.status ?? status.status;
         return {

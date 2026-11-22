@@ -107,9 +107,11 @@ export class RateLimitMetrics {
     let spikeAlerts: RateLimitMetricsSnapshot["spikeAlerts"] = [];
     if (this.redis) {
       try {
-        const values = await this.readWindowBuckets(offenderWindow);
+        // The bucket totals and the spike alerts are independent reads; fetch
+        // them together instead of waiting for one before starting the other.
+        const [values, spikeAlertsResult] = await Promise.all([this.readWindowBuckets(offenderWindow), this.readSpikeAlerts(offenderWindow)]);
         offenderEntries = Object.entries(values).map(([subject, count]) => [subject, Number(count)]);
-        spikeAlerts = await this.readSpikeAlerts(offenderWindow);
+        spikeAlerts = spikeAlertsResult;
       } catch (error) {
         console.warn("[AdminRateLimitMetrics] Redis offender snapshot unavailable:", error);
       }
@@ -204,16 +206,21 @@ export class RateLimitMetrics {
     const firstBucket = Math.floor((now - bucketSeconds) / bucketSeconds);
     const lastBucket = Math.floor(now / bucketSeconds);
     const aggregate: Record<string, number> = {};
-    for (let bucket = firstBucket; bucket <= lastBucket; bucket += 1) {
-      const values = await this.redis!.hGetAll(`${this.redisOffenderPrefix}:${window}:${bucket}`);
+    const buckets: number[] = [];
+    for (let bucket = firstBucket; bucket <= lastBucket; bucket += 1) buckets.push(bucket);
+    // Buckets are independent keys; read them in parallel instead of one by one.
+    const results = await Promise.all(buckets.map((bucket) => this.redis!.hGetAll(`${this.redisOffenderPrefix}:${window}:${bucket}`)));
+    for (const values of results) {
       for (const [subject, count] of Object.entries(values)) aggregate[subject] = (aggregate[subject] ?? 0) + Number(count);
     }
     return aggregate;
   }
 
   private async readSpikeAlerts(window: OffenderWindow) {
-    const current = await this.redis!.hGetAll(getBucketKey(this.redisOffenderPrefix, window));
-    const previous = await this.redis!.hGetAll(getBucketKey(this.redisOffenderPrefix, window, Date.now() - WINDOW_SECONDS[window] * 1_000));
+    const [current, previous] = await Promise.all([
+      this.redis!.hGetAll(getBucketKey(this.redisOffenderPrefix, window)),
+      this.redis!.hGetAll(getBucketKey(this.redisOffenderPrefix, window, Date.now() - WINDOW_SECONDS[window] * 1_000)),
+    ]);
     return Object.entries(current)
       .map(([subject, value]) => ({ subject, currentDenials: Number(value), previousDenials: Number(previous[subject] ?? 0), multiplier: Number(value) / Math.max(1, Number(previous[subject] ?? 0)) }))
       .filter((item) => item.currentDenials >= this.settings.spikeThreshold && item.multiplier >= this.settings.spikeMultiplier)
