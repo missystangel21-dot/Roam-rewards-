@@ -43,6 +43,13 @@
       "when": 1792506427351,
       "tag": "0005_chunky_yellow_claw",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1795330000000,
+      "tag": "0006_index_daily_point_aggregation",
+      "breakpoints": true
     }
   ]
 }

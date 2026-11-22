@@ -6,10 +6,7 @@ import { index, int, mysqlEnum, mysqlTable, text, timestamp, uniqueIndex, varcha
  * Columns use camelCase to match both database fields and generated types.
  */
 export const users = mysqlTable("users", {
-  /**
-   * Surrogate primary key. Auto-incremented numeric value managed by the database.
-   * Use this for relations between tables.
-   */
+  /** Surrogate primary key. Auto-incremented numeric value managed by the database. */
   id: int("id").autoincrement().primaryKey(),
   /** Manus OAuth identifier (openId) returned from the OAuth callback. Unique per user. */
   openId: varchar("openId", { length: 64 }).notNull().unique(),
@@ -50,7 +47,8 @@ export const trailPointLedgerEntries = mysqlTable(
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (table) => [
-    index("ix_trail_ledger_user_time").on(table.userId, table.createdAt),
+    // Covers the user's ledger timeline and the daily credited-points aggregation.
+    index("ix_trail_ledger_user_time").on(table.userId, table.createdAt, table.direction, table.points),
     uniqueIndex("uq_trail_ledger_user_idempotency").on(table.userId, table.idempotencyKey, table.entryType),
     uniqueIndex("uq_trail_ledger_redemption_reservation").on(table.redemptionRequestId, table.entryType),
   ],
