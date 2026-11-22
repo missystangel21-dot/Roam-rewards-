@@ -17,6 +17,8 @@ EXPO_PUBLIC_OAUTH_SERVER_URL=https://api.manus.im
 
 The API URL is the deployed Roam Rewards public origin; the OAuth URL is the configured Manus OAuth service. If the deployment later moves to a custom API hostname, update both the example environment file and the release-build inputs together.
 
+The two non-secret OAuth values (`OAUTH_SERVER_URL`, `VITE_APP_ID`) are set as plain environment variables in `docker-compose.runtime.example.yml`. Only the secrets below use Docker secrets; never put `JWT_SECRET` in the Compose file.
+
 ## External-secret-backed Docker Compose runtime
 
 `docker-compose.runtime.example.yml` now references **external Docker secrets** rather than local `./secrets/*` files. The expected external secret names are:

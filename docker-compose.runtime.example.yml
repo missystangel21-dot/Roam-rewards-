@@ -8,6 +8,10 @@ services:
       NODE_ENV: production
       PORT: "3000"
       APP_ENV: production
+      # Non-secret OAuth config: the Manus OAuth server and this app's ID.
+      # JWT_SECRET stays a Docker secret (see below) and is never set here.
+      OAUTH_SERVER_URL: https://api.manus.im
+      VITE_APP_ID: GfvX2j2qLcCbyZi7QVuqud
     secrets:
       - database_url
       - jwt_secret
@@ -25,7 +29,3 @@ secrets:
   redis_url:
     external: true
     name: ${ROAM_REWARDS_REDIS_URL_SECRET:-roam-rewards-redis-url}
-
-docker secret ls \
-  --format '{{.Name}}' |
-  grep -E '^roam-rewards-(database-url|jwt-secret|redis-url)$'
