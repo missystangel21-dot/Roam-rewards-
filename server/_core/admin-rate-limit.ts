@@ -62,7 +62,7 @@ return { 1, maxRequests - current - 1, 0 }
  */
 export class RedisSlidingWindowRateLimiter implements RateLimitBackend {
   private readonly client: RedisClientType;
-  private readonly connectPromise: Promise<void>;
+  private connectAttempt: Promise<void> | undefined;
   private readonly prefix: string;
   private readonly metrics: RateLimitMetrics;
 
@@ -71,14 +71,42 @@ export class RedisSlidingWindowRateLimiter implements RateLimitBackend {
     this.client.on("error", (error) => {
       console.error("[AdminRateLimit] Redis client error:", error);
     });
-    this.connectPromise = this.client.connect().then(() => undefined);
     this.prefix = prefix;
     this.metrics = metrics;
     this.metrics.configureRedis(this.client, `${prefix}offenders`);
   }
 
+  /**
+   * Connect on first use. A failed attempt is forgotten as soon as it settles,
+   * so the next call retries instead of re-throwing a stale rejection forever.
+   * The in-flight attempt is shared by concurrent callers and is always
+   * observed by the clearing handlers below, so a rejection can never become
+   * an unhandled rejection that crashes the process.
+   *
+   * node-redis retries a dropped connection itself (default reconnect
+   * strategy), so an open-but-not-ready client needs no new connect call:
+   * commands queue until it is ready.
+   */
+  private ensureConnected(): Promise<void> {
+    if (this.client.isReady || this.client.isOpen) {
+      return Promise.resolve();
+    }
+    if (!this.connectAttempt) {
+      this.connectAttempt = this.client.connect().then(() => undefined);
+      void this.connectAttempt.then(
+        () => {
+          this.connectAttempt = undefined;
+        },
+        () => {
+          this.connectAttempt = undefined;
+        },
+      );
+    }
+    return this.connectAttempt;
+  }
+
   async consume(key: string, options: AdminRateLimitOptions): Promise<RateLimitDecision> {
-    await this.connectPromise;
+    await this.ensureConnected();
     const startedAt = performance.now();
     let result;
     try {
@@ -102,7 +130,9 @@ export class RedisSlidingWindowRateLimiter implements RateLimitBackend {
   }
 
   async close() {
-    await this.connectPromise;
+    if (!this.client.isOpen) {
+      return;
+    }
     await this.client.quit();
   }
 }
