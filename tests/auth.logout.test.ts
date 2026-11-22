@@ -29,6 +29,7 @@ function createAuthContext(): { ctx: TrpcContext; clearedCookies: CookieCall[] }
     user,
     req: {
       protocol: "https",
+      hostname: "localhost",
       headers: {},
     } as TrpcContext["req"],
     res: {
@@ -37,12 +38,15 @@ function createAuthContext(): { ctx: TrpcContext; clearedCookies: CookieCall[] }
       },
     } as TrpcContext["res"],
   };
-  
+
   return { ctx, clearedCookies };
 }
 
-// TODO: Remove `.skip` below once you implement user authentication
-describe.skip("auth.logout", () => {
+// Logout is implemented (tRPC `auth.logout` in server/routers.ts clears the
+// session cookie; the Express POST /api/auth/logout route does the same).
+// Live login itself still depends on the Manus OAuth server env config
+// (OAUTH_SERVER_URL, VITE_APP_ID, JWT_SECRET) — see docs/launch-readiness.md.
+describe("auth.logout", () => {
   it("clears the session cookie and reports success", async () => {
     const { ctx, clearedCookies } = createAuthContext();
     const caller = appRouter.createCaller(ctx);

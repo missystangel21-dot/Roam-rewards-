@@ -227,7 +227,11 @@ function validateOptions(options: AdminRateLimitOptions): AdminRateLimitOptions 
 }
 
 function readPositiveInt(name: string, fallback: number): number {
-  const value = Number.parseInt(process.env[name] ?? "", 10);
+  // Strict: the whole value must be digits. parseInt would silently accept
+  // "60abc" as 60, so it is not used here.
+  const raw = process.env[name] ?? "";
+  if (!/^\d+$/.test(raw)) return fallback;
+  const value = Number(raw);
   return Number.isInteger(value) && value > 0 ? value : fallback;
 }
 

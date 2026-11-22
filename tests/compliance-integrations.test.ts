@@ -74,7 +74,10 @@ describe("tax transaction export", () => {
       currency: "USD",
       grossAmountMinor: 1200,
     }]);
-    expect(csv).toContain('"tax,""ref"""');
+    // The reference `tax,"ref` contains a comma and a quote, so RFC 4180
+    // escaping wraps it in quotes and doubles the inner quote:
+    // `"tax,""ref"`. (An earlier expectation had one quote too many.)
+    expect(csv).toContain('"tax,""ref"');
     expect(csv).toContain('"1200"');
     expect(csv).not.toContain("SSN");
   });

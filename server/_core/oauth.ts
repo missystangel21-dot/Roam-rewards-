@@ -40,25 +40,30 @@ async function syncUser(userInfo: {
   );
 }
 
-function buildUserResponse(
-  user:
-    | Awaited<ReturnType<typeof getUserByOpenId>>
-    | {
-        openId: string;
-        name?: string | null;
-        email?: string | null;
-        loginMethod?: string | null;
-        role?: "user" | "admin";
-        lastSignedIn?: Date | null;
-      },
-) {
+/**
+ * The shapes that can be turned into a user response: a database User (has
+ * `id` and `role`) or the fallback object built by syncUser when the row is
+ * not found yet (no `id` or `role`). Both are spelled out here so no cast
+ * is needed to read either field.
+ */
+type UserResponseInput = {
+  id?: number | null;
+  openId: string;
+  name?: string | null;
+  email?: string | null;
+  loginMethod?: string | null;
+  role?: "user" | "admin";
+  lastSignedIn?: Date | null;
+};
+
+function buildUserResponse(user: UserResponseInput) {
   return {
-    id: (user as any)?.id ?? null,
+    id: user.id ?? null,
     openId: user?.openId ?? null,
     name: user?.name ?? null,
     email: user?.email ?? null,
     loginMethod: user?.loginMethod ?? null,
-    role: (user as any)?.role === "admin" ? "admin" : "user",
+    role: user.role === "admin" ? "admin" : "user",
     lastSignedIn: (user?.lastSignedIn ?? new Date()).toISOString(),
   };
 }

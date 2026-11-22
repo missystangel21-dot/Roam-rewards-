@@ -13,7 +13,7 @@ const WINDOW_SECONDS: Record<OffenderWindow, number> = {
 };
 
 const ALL_WINDOWS = Object.keys(WINDOW_SECONDS) as OffenderWindow[];
-type OffenderRedis = Pick<RedisClientType, "hIncrBy" | "expire" | "hGetAll" | "hSet" | "rPush" | "lTrim" | "lRange">;
+type OffenderRedis = Pick<RedisClientType, "hIncrBy" | "expire" | "hGetAll" | "hSet" | "rPush" | "lTrim" | "lRange" | "multi">;
 
 export type RateLimitAuditEvent = {
   id: string;
@@ -57,6 +57,9 @@ export class RateLimitMetrics {
   private readonly configKey = "roam-rewards:admin-rate-limit:privacy";
   private readonly auditKey = "roam-rewards:admin-rate-limit:privacy-audit";
   private settings: RateLimitPrivacySettings;
+  // Short-lived cache for the shared privacy settings (see loadSharedSettings).
+  private settingsCacheUntil = 0;
+  private static readonly SETTINGS_CACHE_TTL_MS = 30_000;
 
   constructor() {
     this.settings = {
@@ -70,6 +73,7 @@ export class RateLimitMetrics {
   configureRedis(redis: OffenderRedis, key = "roam-rewards:admin-rate-limit:offenders") {
     this.redis = redis;
     this.redisOffenderPrefix = key;
+    this.settingsCacheUntil = 0;
   }
 
   recordAllowed() { this.allowedRequests += 1; }
@@ -80,13 +84,18 @@ export class RateLimitMetrics {
     await this.loadSharedSettings();
     const displaySubject = formatSubject(subject, this.settings.identifierVisibility);
     this.deniedBySubject.set(displaySubject, (this.deniedBySubject.get(displaySubject) ?? 0) + 1);
-    if (!this.redis) return;
+    const redis = this.redis;
+    if (!redis) return;
     try {
-      await Promise.all(ALL_WINDOWS.map(async (window) => {
+      // One MULTI pipeline for all windows: a single round trip instead of
+      // ~2 sequential round trips (5 windows x hIncrBy + expire).
+      const multi = redis.multi();
+      for (const window of ALL_WINDOWS) {
         const bucket = getBucketKey(this.redisOffenderPrefix, window);
-        await this.redis!.hIncrBy(bucket, displaySubject, 1);
-        await this.redis!.expire(bucket, this.settings.retentionDays * 24 * 60 * 60);
-      }));
+        multi.hIncrBy(bucket, displaySubject, 1);
+        multi.expire(bucket, this.settings.retentionDays * 24 * 60 * 60);
+      }
+      await multi.exec();
     } catch (error) {
       console.warn("[AdminRateLimitMetrics] Redis offender aggregation unavailable:", error);
     }
@@ -164,6 +173,8 @@ export class RateLimitMetrics {
         await this.redis.expire(this.auditKey, 30 * 24 * 60 * 60);
       }
     }
+    // Settings just changed; drop the cache so the next read fetches fresh values.
+    this.settingsCacheUntil = 0;
     this.localAuditEvents.push(...changes);
     return { settings: await this.getPrivacySettings(), changes };
   }
@@ -187,14 +198,24 @@ export class RateLimitMetrics {
     return { items: events.slice(start, start + limit), page, hasMore: start + limit < events.length };
   }
 
+  /**
+   * Shared privacy settings live in Redis so every API instance sees the same
+   * values, but they change rarely (admin edits only). Cache a successful read
+   * for a short TTL so the per-denied-request, per-snapshot (5s poll), and
+   * per-privacy-read fetches don't each cost a Redis round trip. A failed
+   * fetch is never cached, so the next call retries. updatePrivacySettings,
+   * configureRedis, and reset() invalidate the cache.
+   */
   private async loadSharedSettings() {
     if (!this.redis) return;
+    if (Date.now() < this.settingsCacheUntil) return;
     try {
       const values = await this.redis.hGetAll(this.configKey);
       if (values.retentionDays) this.settings.retentionDays = validateRetention(Number(values.retentionDays));
       if (values.identifierVisibility === "FULL" || values.identifierVisibility === "MASKED") this.settings.identifierVisibility = values.identifierVisibility;
       if (values.spikeThreshold) this.settings.spikeThreshold = validateSpikeThreshold(Number(values.spikeThreshold));
       if (values.spikeMultiplier) this.settings.spikeMultiplier = validateSpikeMultiplier(Number(values.spikeMultiplier));
+      this.settingsCacheUntil = Date.now() + RateLimitMetrics.SETTINGS_CACHE_TTL_MS;
     } catch (error) {
       console.warn("[AdminRateLimitMetrics] Redis privacy settings unavailable:", error);
     }
@@ -233,7 +254,7 @@ export class RateLimitMetrics {
   }
 
   reset() {
-    this.allowedRequests = 0; this.deniedRequests = 0; this.redisCalls = 0; this.redisLatencyTotal = 0; this.redisLatencyMax = 0; this.recentRedisLatency.length = 0; this.deniedBySubject.clear(); this.localAuditEvents.length = 0;
+    this.allowedRequests = 0; this.deniedRequests = 0; this.redisCalls = 0; this.redisLatencyTotal = 0; this.redisLatencyMax = 0; this.recentRedisLatency.length = 0; this.deniedBySubject.clear(); this.localAuditEvents.length = 0; this.settingsCacheUntil = 0;
   }
 }
 
@@ -242,7 +263,7 @@ function formatSubject(subject: string, visibility: IdentifierVisibility) { if (
 function validateRetention(value: number) { if (!Number.isInteger(value) || value < 1 || value > 30) throw new Error("Retention must be an integer from 1 to 30 days"); return value; }
 function validateSpikeThreshold(value: number) { if (!Number.isInteger(value) || value < 1 || value > 1_000_000) throw new Error("Spike threshold must be a positive integer"); return value; }
 function validateSpikeMultiplier(value: number) { if (!Number.isFinite(value) || value < 1 || value > 100) throw new Error("Spike multiplier must be between 1 and 100"); return value; }
-function readBoundedInt(name: string, fallback: number, min: number, max: number) { const value = Number.parseInt(process.env[name] ?? "", 10); return Number.isInteger(value) && value >= min && value <= max ? value : fallback; }
+function readBoundedInt(name: string, fallback: number, min: number, max: number) { const raw = process.env[name] ?? ""; if (!/^\d+$/.test(raw)) return fallback; const value = Number(raw); return Number.isInteger(value) && value >= min && value <= max ? value : fallback; }
 function readBoundedNumber(name: string, fallback: number, min: number, max: number) { const value = Number(process.env[name] ?? ""); return Number.isFinite(value) && value >= min && value <= max ? value : fallback; }
 
 export const adminRateLimitMetrics = new RateLimitMetrics();
