@@ -26,7 +26,8 @@ on:
       - "components/**"
       - "lib/**"
       - "hooks/**"
-permissions: 
+permissions:
+  contents: read
 jobs:
   android-container-and-gradle:
     runs-on: ubuntu-latest
